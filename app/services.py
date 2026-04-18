@@ -93,7 +93,7 @@ def get_time_range_for_stats(timeframe: str):
 
 def get_combined_events(es, timeframe, filters=None, search_query=None, logic="AND"):
     # Pattern index gabungan
-    index_pattern = "logs-*, .ds-logs-suricata*, .ds-logs-sophos*, .ds-logs-panw.panos-default-*"
+    index_pattern = "logs-*"
     
     # 1. Penentuan Waktu (Sesuai timeframe)
     if timeframe == "today": 
