@@ -92,686 +92,209 @@ def get_time_range_for_stats(timeframe: str):
     return start, now
 
 def get_combined_events(es, timeframe, filters=None, search_query=None, logic="AND"):
-    # Pattern index gabungan
     index_pattern = "logs-*"
-    
-    # 1. Penentuan Waktu (Sesuai timeframe)
-    if timeframe == "today": 
+
+    # =============================
+    # 1. TIME FILTER
+    # =============================
+    if timeframe == "today":
         gte, lte = "now/d", "now"
-    elif timeframe == "yesterday": 
+    elif timeframe == "yesterday":
         gte, lte = "now-1d/d", "now"
-    elif timeframe == "last7days": 
+    elif timeframe == "last7days":
         gte, lte = "now-7d/d", "now"
-    else: 
+    else:
         gte, lte = "now-30d/d", "now"
 
-    # 2. Filter Dasar (Wajib)
-    # Catatan: exists source.ip sengaja tetap ada sesuai codingan Anda
     base_filters = [
-        {"range": {"@timestamp": {"gte": gte, "lte": lte, "time_zone": "+07:00"}}},
-        {"terms": {"event.module": ["suricata", "sophos", "panw"]}}
-        # {"exists": {"field": "source.ip"}}
+        {
+            "range": {
+                "@timestamp": {
+                    "gte": gte,
+                    "lte": lte,
+                    "time_zone": "+07:00"
+                }
+            }
+        },
+        {
+            "term": {
+                "event.module": "suricata"
+            }
+        }
     ]
 
     dynamic_filters = []
 
-    # 3. Logika Filter Pencarian Kolom (Mapping Dinamis & Operator)
+    # =============================
+    # 2. DYNAMIC FILTER
+    # =============================
     if filters:
         for f in filters:
             field = f.field
             val = f.value
-            op = getattr(f, 'operator', 'is') # Default ke 'is' jika operator tidak ada
-            
+            op = getattr(f, "operator", "is")
+
             clause = None
-            target_fields = []
-            sophos_extra_filter = None
 
-            # --- A. LOGIKA MAPPING FIELD ---
-            if field == "severity":
-                # target_fields = ["event.severity_label", "log.syslog.severity.name"]
-                # sophos_extra_filter = {"match_phrase": {"message": f"severity=\"{val}\""}}
-                clause = {
-                    "bool": {
-                        "should": [
+            if field == "source_ip":
+                clause = {"term": {"source.ip": val}}
 
-                        # SURICATA
-                        {       
-                            "bool": {
-                            "must": [
-                                    {"term": {"event.module": "suricata"}},
-                                    {"term": {"event.severity_label": val}}
-                                ]
-                            }
-                        },
-
-                        # SOPHOS
-                        {
-                            "bool": {
-                            "must": [
-                                    {"term": {"event.module": "sophos"}},
-                                    {
-                                        "match_phrase": {
-                                        "message": f'severity="{val}"'
-                                        }
-                                    }
-                                ]
-                            }
-                        }
-
-                    ],
-                    "minimum_should_match": 1
-                    }
-                    }
-            elif field == "mitre_stages":
-                mitre_mapping = {
-                    "Initial Attempts": ["Initial", "Reconnaissance"],
-                    "Persistent Foothold": ["Execution", "Persistence", "Privilege", "Escalation"],
-                    "Exploration": ["Defense", "Credential", "Discovery", "Command"],
-                    "Propagation": ["Lateral"],
-                    "Exfiltration": ["Collection", "Exfiltration", "Impact"]
-                }
-                prefixes = mitre_mapping.get(val, [val.lower()])
-                # Khusus MITRE menggunakan prefix logic
-                clause = {
-                    "bool": {
-                        "should": [{"prefix": {"rule.metadata.mitre_tactic_name": p}} for p in prefixes] + 
-                                  [{"prefix": {"mitre.stages": p}} for p in prefixes],
-                        "minimum_should_match": 1
-                    }
-                }
-            elif field == "source_ip":
-                # target_fields = ["source.ip"]
-                # # Tambahkan logika khusus untuk mencari teks src_ip di dalam message
-                # sophos_extra_filter = {"match_phrase": {"message": f"src_ip=\"{val}\""}}
-                clause = {
-                    "bool": {
-                        "should": [
-
-                        # SURICATA
-                        {       
-                            "bool": {
-                            "must": [
-                                    {"term": {"event.module": "suricata"}},
-                                    {"term": {"source.ip": val}}
-                                ]
-                            }
-                        },
-
-                        # SOPHOS
-                        {
-                            "bool": {
-                            "must": [
-                                    {"term": {"event.module": "sophos"}},
-                                    {
-                                        "match_phrase": {
-                                        "message": f'src_ip="{val}"'
-                                        }
-                                    }
-                                ]
-                            }
-                        }
-
-                    ],
-                    "minimum_should_match": 1
-                    }
-                    }
             elif field == "destination_ip":
-                # target_fields = ["destination.ip"]
-                # sophos_extra_filter = {"match_phrase": {"message": f"dst_ip=\"{val}\""}}
-                clause = {
-                    "bool": {
-                        "should": [
+                clause = {"term": {"destination.ip": val}}
 
-                        # SURICATA
-                        {       
-                            "bool": {
-                            "must": [
-                                    {"term": {"event.module": "suricata"}},
-                                    {"term": {"destination.ip": val}}
-                                ]
-                            }
-                        },
-
-                        # SOPHOS
-                        {
-                            "bool": {
-                            "must": [
-                                    {"term": {"event.module": "sophos"}},
-                                    {
-                                        "match_phrase": {
-                                        "message": f'dst_ip="{val}"'
-                                        }
-                                    }
-                                ]
-                            }
-                        }
-
-                    ],
-                    "minimum_should_match": 1
-                    }
-                    }
-            elif field == "country":
-                # target_fields = ["source.geo.country_name"]
-                # sophos_extra_filter = {"match_phrase": {"message": f"src_country=\"{val}\""}}
-                clause = {
-                    "bool": {
-                        "should": [
-
-                        # SURICATA
-                        {       
-                            "bool": {
-                            "must": [
-                                    {"term": {"event.module": "suricata"}},
-                                    {"term": {"source.geo.country_name": val}}
-                                ]
-                            }
-                        },
-
-                        # SOPHOS
-                        {
-                            "bool": {
-                            "must": [
-                                    {"term": {"event.module": "sophos"}},
-                                    {
-                                        "match_phrase": {
-                                        "message": f'src_country="{val}"'
-                                        }
-                                    }
-                                ]
-                            }
-                        }
-
-                    ],
-                    "minimum_should_match": 1
-                    }
-                    }
-            elif field == "destination_country":
-                # target_fields = ["destination.geo.country_name"]
-                # sophos_extra_filter = {"match_phrase": {"message": f"dst_country=\"{val}\""}}
-                clause = {
-                    "bool": {
-                        "should": [
-
-                        # SURICATA
-                        {       
-                            "bool": {
-                            "must": [
-                                    {"term": {"event.module": "suricata"}},
-                                    {"term": {"destination.geo.country_name": val}}
-                                ]
-                            }
-                        },
-
-                        # SOPHOS
-                        {
-                            "bool": {
-                            "must": [
-                                    {"term": {"event.module": "sophos"}},
-                                    {
-                                        "match_phrase": {
-                                        "message": f'dst_country="{val}"'
-                                        }
-                                    }
-                                ]
-                            }
-                        }
-
-                    ],
-                    "minimum_should_match": 1
-                    }
-                    }
-            elif field == "event_type":
-                val_l = val.lower()
-                dataset_val = "sophos.xg" if val_l == "sophos" else ("panw.panos" if val_l == "panw" else val_l)
-                target_fields = ["event.module", "event.dataset"]
-                val = dataset_val # Update nilai untuk term query
-            elif field == "protocol":
-                # target_fields = ["network.transport"]
-                # sophos_extra_filter = {"match_phrase": {"message": f"protocol=\"{val}\""}}
-                clause = {
-                    "bool": {
-                        "should": [
-
-                        # SURICATA
-                        {       
-                            "bool": {
-                            "must": [
-                                    {"term": {"event.module": "suricata"}},
-                                    {"term": {"network.transport": val}}
-                                ]
-                            }
-                        },
-
-                        # SOPHOS
-                        {
-                            "bool": {
-                            "must": [
-                                    {"term": {"event.module": "sophos"}},
-                                    {
-                                        "match_phrase": {
-                                        "message": f'protocol="{val}"'
-                                        }
-                                    }
-                                ]
-                            }
-                        }
-
-                    ],
-                    "minimum_should_match": 1
-                    }
-                    }
             elif field == "port":
-                # target_fields = ["destination.port", "dst_port", "dest.port"]
-                # sophos_extra_filter = {"match_phrase": {"message": f"dst_port={val}"}}
+                clause = {"term": {"destination.port": val}}
+
+            elif field == "protocol":
+                clause = {"term": {"network.transport": val.upper()}}
+
+            elif field == "severity":
+                clause = {"term": {"event.severity_label": val}}
+
+            elif field == "description":
                 clause = {
-                    "bool": {
-                        "should": [
+                    "wildcard": {
+                        "rule.name": {
+                            "value": f"*{val}*",
+                            "case_insensitive": True
+                        }
+                    }
+                }
 
-                        # SURICATA
-                        {       
-                            "bool": {
-                            "must": [
-                                    {"term": {"event.module": "suricata"}},
-                                    {"term": {"destination.port": val}}
-                                ]
-                            }
-                        },
+            elif field == "category":
+                clause = {"term": {"rule.category": val}}
 
-                        # SOPHOS
-                        {
-                            "bool": {
-                            "must": [
-                                    {"term": {"event.module": "sophos"}},
-                                    {
-                                        "match_phrase": {
-                                        "message": f'dst_port="{val}"'
-                                        }
-                                    }
-                                ]
+            # operator tambahan
+            if clause:
+                if op == "is":
+                    dynamic_filters.append(clause)
+
+                elif op == "is_not":
+                    dynamic_filters.append({
+                        "bool": {
+                            "must_not": [clause]
+                        }
+                    })
+
+                elif op == "contains":
+                    dynamic_filters.append({
+                        "wildcard": {
+                            list(clause["term"].keys())[0]: {
+                                "value": f"*{val}*",
+                                "case_insensitive": True
                             }
                         }
+                    })
 
-                    ],
-                    "minimum_should_match": 1
-                    }
-                    }
-            else:
-                target_fields = [field]
-
-            # --- B. LOGIKA OPERATOR (is, is_not, contains, exists, >, <) ---
-            # if not clause:
-            #     if op == "is":
-            #         clause = {"bool": {"should": [{"term": {tf: val}} for tf in target_fields], "minimum_should_match": 1}}
-            #     elif op == "is_not":
-            #         clause = {"bool": {"must_not": [{"term": {tf: val}} for tf in target_fields]}}
-            #     elif op == "contains":
-            #         # Wildcard biasanya butuh .keyword untuk field text/ip
-            #         clause = {"bool": {"should": [{"wildcard": {f"{tf}.keyword": f"*{val}*"}} for tf in target_fields], "minimum_should_match": 1}}
-            #     elif op == "exists":
-            #         clause = {"bool": {"should": [{"exists": {"field": tf}} for tf in target_fields], "minimum_should_match": 1}}
-            #     elif op == "greater_than":
-            #         clause = {"bool": {"should": [{"range": {tf: {"gt": val}}} for tf in target_fields], "minimum_should_match": 1}}
-            #     elif op == "less_than":
-            #         clause = {"bool": {"should": [{"range": {tf: {"lt": val}}} for tf in target_fields], "minimum_should_match": 1}}
-
-            if not clause:
-                if op == "is":
-                    should_list = [{"term": {tf: val}} for tf in target_fields]
-                    if sophos_extra_filter: should_list.append(sophos_extra_filter)
-                    clause = {"bool": {"should": should_list, "minimum_should_match": 1}}
-                    
-                elif op == "is_not":
-                    must_not_list = [{"term": {tf: val}} for tf in target_fields]
-                    if sophos_extra_filter:
-                        must_not_list.append(sophos_extra_filter)
-                        
-                    clause = {"bool": {"must_not": must_not_list}}
-                    
-                elif op == "contains":
-                    should_list = [{"wildcard": {f"{tf}.keyword": f"*{val}*"}} for tf in target_fields]
-                    # Untuk contains, kita gunakan match biasa pada message agar lebih fleksibel
-                    if sophos_extra_filter:
-                        should_list.append({"match": {"message": val}})
-                        
-                    clause = {"bool": {"should": should_list, "minimum_should_match": 1}}
-                    
-                elif op == "exists":
-                    clause = {"bool": {"should": [{"exists": {"field": tf}} for tf in target_fields], "minimum_should_match": 1}}
-                    
-                elif op == "greater_than":
-                    clause = {"bool": {"should": [{"range": {tf: {"gt": val}}} for tf in target_fields], "minimum_should_match": 1}}
-                    
-                elif op == "less_than":
-                    clause = {"bool": {"should": [{"range": {tf: {"lt": val}}} for tf in target_fields], "minimum_should_match": 1}}
-
-            if clause:
-                dynamic_filters.append(clause)
-
-    # 4. Menggabungkan Filter dengan Logic (AND / OR)
-    print(f"DEBUG: Nilai variabel logic yang diterima fungsi adalah: '{logic}'")
-
-    # Kita bersihkan variabel logic dari spasi dan paksa huruf besar
-    logic_type = str(logic).strip().upper() if logic else "AND"
+    # =============================
+    # 3. LOGIC AND / OR
+    # =============================
+    logic_type = str(logic).strip().upper()
 
     if logic_type == "OR" and dynamic_filters:
-        # STRUKTUR INI AKAN MENGHASILKAN: (Waktu & Module) AND (IP OR Country)
         final_query = {
             "bool": {
-                "filter": base_filters,     # Wajib cocok (Time & Module)
-                "should": dynamic_filters,  # Salah satu boleh (IP, Country, dll)
-                "minimum_should_match": 1   # Syarat agar 'should' bertindak sebagai OR
+                "filter": base_filters,
+                "should": dynamic_filters,
+                "minimum_should_match": 1
             }
         }
-        print("DEBUG: Menggunakan logika OR (Should)")
     else:
-        # STRUKTUR INI AKAN MENGHASILKAN: Waktu AND Module AND IP AND Country
         final_query = {
             "bool": {
                 "filter": base_filters + dynamic_filters
             }
         }
-        print("DEBUG: Menggunakan logika AND (Filter Array)")
 
-    # 5. Logika Search Bar (Sama seperti codingan Anda, jangan ada yang dihapus)
+    # =============================
+    # 4. SEARCH BAR
+    # =============================
     if search_query:
-        search_should_filters = []
+        search_should = []
 
-        query_map = {
-        "sophos": "sophos.xg",
-        }
-        mapped_query = query_map.get(search_query.lower(), search_query)
-        
-        # --- A. Logika IP (Tetap Sama) ---
-        if any(char.isdigit() for char in search_query):
-            if search_query.count('.') < 3:
-                search_should_filters.append({"wildcard": {"source.ip.keyword": f"{mapped_query}*"}})
-                search_should_filters.append({"wildcard": {"destination.ip.keyword": f"{mapped_query}*"}})
-            else:
-                search_should_filters.append({"match": {"source.ip": mapped_query}})
-                search_should_filters.append({"match": {"destination.ip": mapped_query}})
-        
-        # --- B. Logika Khusus Mapping MITRE untuk Search Bar ---
-        mitre_mapping = {
-            "Initial Attempts": ["Initial", "Reconnaissance"],
-            "initial attempts": ["Initial", "Reconnaissance"],
-            "Initial": ["Initial", "Reconnaissance"],
-            "initial": ["Initial", "Reconnaissance"],
-            "Attempts": ["Initial", "Reconnaissance"],
-            "attempts": ["Initial", "Reconnaissance"],
-            "Persistent Foothold": ["Execution", "Persistence", "Privilege", "Escalation"],
-            "persistent foothold": ["Execution", "Persistence", "Privilege", "Escalation"],
-            "Persistent": ["Execution", "Persistence", "Privilege", "Escalation"],
-            "persistent": ["Execution", "Persistence", "Privilege", "Escalation"],
-            "Foothold": ["Execution", "Persistence", "Privilege", "Escalation"],
-            "foothold": ["Execution", "Persistence", "Privilege", "Escalation"],
-            "Exploration": ["Defense", "Credential", "Discovery", "Command"],
-            "exploration": ["Defense", "Credential", "Discovery", "Command"],
-            "Propagation": ["Lateral"],
-            "propagation": ["Lateral"],
-            "Exfiltration": ["Collection", "Exfiltration", "Impact"],
-            "exfiltration": ["Collection", "Exfiltration", "Impact"]
-        }
+        # IP search
+        if any(c.isdigit() for c in search_query):
+            search_should.append({"match": {"source.ip": search_query}})
+            search_should.append({"match": {"destination.ip": search_query}})
 
-        # Jika search_query cocok dengan kategori MITRE
-        if mapped_query in mitre_mapping:
-            prefixes = mitre_mapping[search_query]
-            for p in prefixes:
-                # Gunakan prefix query agar mencari kata depan (case-insensitive tergantung mapping ES)
-                search_should_filters.append({"prefix": {"rule.metadata.mitre_tactic_name": p}})
-                search_should_filters.append({"prefix": {"mitre.stages": p}})
-        else:
-            # Jika bukan kategori MITRE, gunakan match standar (seperti codingan lama Anda)
-            search_should_filters.append({"match": {"rule.metadata.mitre_tactic_name": mapped_query}})
-            search_should_filters.append({"match": {"mitre.stages": mapped_query}})
-
-        if any(char.isdigit() for char in mapped_query) and ("-" in mapped_query or "." in mapped_query):
-             search_should_filters.append({
-                "query_string": {
-                    "fields": [
-                        "source.geo.location.lon", 
-                        "source.geo.location.lat",
-                        "destination.geo.location.lon",
-                        "destination.geo.location.lat"
-                    ],
-                    "query": f"{mapped_query}*" # Query string lebih fleksibel untuk angka
+        # text search
+        search_should.extend([
+            {
+                "wildcard": {
+                    "message": {
+                        "value": f"*{search_query}*",
+                        "case_insensitive": True
+                    }
                 }
-            })
-
-        # --- C. Logika Pencarian Teks Lainnya (Tetap Sama) ---
-        search_should_filters.extend([
-            {"wildcard": {"message": {"value": f"*{mapped_query}*", "case_insensitive": True}}},
-            {"match": {"message": {"query": mapped_query, "operator": "and"}}},
-            {"match_phrase": {"message": mapped_query}},
-            #timestamp (belum bisa)
-            {"wildcard": {"@timestamp.keyword": {"value": f"*{mapped_query}*", "case_insensitive": True}}},
-            #event_type
-            {"wildcard": {"event.module": {"value": f"*{mapped_query}*", "case_insensitive": True}}},
-            {"wildcard": {"event.dataset": {"value": f"*{mapped_query}*", "case_insensitive": True}}},
-            #port
-            {"wildcard": {"destination.port.keyword": {"value": f"*{mapped_query}*", "case_insensitive": True}}},
-            {"wildcard": {"dst_port.keyword": {"value": f"*{mapped_query}*", "case_insensitive": True}}},
-            {"wildcard": {"dest_port.keyword": {"value": f"*{mapped_query}*", "case_insensitive": True}}},
-            #protocol
-            {"term": {"network.transport": mapped_query.upper()}},
-            #source_country
-            {"wildcard": {"source.geo.country_name.keyword": {"value": f"*{mapped_query}*", "case_insensitive": True}}},
-            #destination_country
-            {"wildcard": {"destination.geo.country_name.keyword": {"value": f"*{mapped_query}*", "case_insensitive": True}}},
-            #severity
-            {"wildcard": {"event.severity_label": {"value": f"*{mapped_query}*", "case_insensitive": True}}},
-            {"wildcard": {"log.level": {"value": f"*{mapped_query}*", "case_insensitive": True}}},
-            {"wildcard": {"log.syslog.severity.name": {"value": f"*{mapped_query}*", "case_insensitive": True}}},
-            #description
-            {"wildcard": {"rule.name": {"value": f"*{mapped_query}*", "case_insensitive": True}}},
-            #sub_type
-            {"wildcard": {"rule.category.keyword": {"value": f"*{mapped_query}*", "case_insensitive": True}}},
-            {"wildcard": {"log_type.keyword": {"value": f"*{mapped_query}*", "case_insensitive": True}}},
-            {"wildcard": {"sub_type.keyword": {"value": f"*{mapped_query}*", "case_insensitive": True}}},
-            #event_id
-            {"wildcard": {"log.id.uid.keyword": {"value": f"*{mapped_query}*", "case_insensitive": True}}},
-            {"wildcard": {"seqno.keyword": {"value": f"*{mapped_query}*", "case_insensitive": True}}},
-            #source_longitude_latitude
-            {"wildcard": {"source.geo.location.lon": {"value": f"*{mapped_query}*", "case_insensitive": True}}},
-            {"wildcard": {"source.geo.location.lat": {"value": f"*{mapped_query}*", "case_insensitive": True}}},
-            {"match_phrase": {"source.geo.location.lon": mapped_query}},
-            {"match_phrase": {"source.geo.location.lat": mapped_query}},
-            #destination_longitude_latitude
-            {"wildcard": {"destination.geo.location.lon.keyword": {"value": f"*{mapped_query}*", "case_insensitive": True}}},
-            {"wildcard": {"destination.geo.location.lat.keyword": {"value": f"*{mapped_query}*", "case_insensitive": True}}},
-            {"match_phrase": {"destination.geo.location.lon": mapped_query}},
-            {"match_phrase": {"destination.geo.location.lat": mapped_query}},
-            #data_tambahan_suricata
-            {"wildcard": {"rule.refrence.keyword": {"value": f"*{mapped_query}*", "case_insensitive": True}}},
-            {"wildcard": {"rule.ruleset": {"value": f"*{mapped_query}*", "case_insensitive": True}}},
-            {"wildcard": {"rule.action": {"value": f"*{mapped_query}*", "case_insensitive": True}}}, 
-            {"wildcard": {"rule.uuid": {"value": f"*{mapped_query}*", "case_insensitive": True}}}, 
-            {"wildcard": {"rule.metadata.update_at": {"value": f"*{mapped_query}*", "case_insensitive": True}}}, 
-            {"wildcard": {"rule.metadata.created_at": {"value": f"*{mapped_query}*", "case_insensitive": True}}}, 
-            {"wildcard": {"rule.metadata.confidence": {"value": f"*{mapped_query}*", "case_insensitive": True}}},
-            {"wildcard": {"rule.metadata.tag": {"value": f"*{mapped_query}*", "case_insensitive": True}}}, 
-            {"wildcard": {"rule.metadata.signature_severity": {"value": f"*{mapped_query}*", "case_insensitive": True}}},
-            {"wildcard": {"network.packet_source": {"value": f"*{mapped_query}*", "case_insensitive": True}}},
-            {"wildcard": {"event.category.signature_severity": {"value": f"*{mapped_query}*", "case_insensitive": True}}},
+            },
+            {"match": {"rule.name": search_query}},
+            {"match": {"rule.category": search_query}},
+            {"match": {"event.severity_label": search_query}},
+            {"term": {"network.transport": search_query.upper()}}
         ])
-        # search_should_filters.extend([
-        #     {"match": {"event.severity_label": search_query}},
-        #     {"match": {"log.level": search_query}},
-        #     {"match": {"log.syslog.severity.name": search_query}},
-        #     {"match": {"event.module": search_query}},
-        #     {"match": {"event.dataset": search_query}},
-        #     {"match": {"source.geo.country_name": search_query}},
-        #     {"match": {"destination.geo.country_name": search_query}},
-        #     {"term": {"network.transport": search_query.upper()}},
-        #     # {"match": {"destination.port": search_query}},
-        #     {"match": {"rule.name": search_query}},
-        # ])
 
-        # PENTING: Bungkus ke dalam final_query
-        if "bool" not in final_query:
-            final_query["bool"] = {}
-        
-        if "must" not in final_query["bool"]:
-            final_query["bool"]["must"] = []
-    
+        final_query["bool"].setdefault("must", [])
         final_query["bool"]["must"].append({
             "bool": {
-                "should": search_should_filters,
+                "should": search_should,
                 "minimum_should_match": 1
             }
         })
-        # if "must" not in final_query["bool"]:
-        #     final_query["bool"]["must"] = []
-        
-        # final_query["bool"]["must"].append({
-        #     "bool": {
-        #         "should": search_should_filters,
-        #         "minimum_should_match": 1
-        #     }
-        # })
 
-    # 6. Eksekusi Query
-    # query = {
-    #     "size": 500,
-    #     "track_total_hits": True,
-    #     "query": final_query,
-    #     "sort": [{"@timestamp": {"order": "desc"}}]
-    # }
+    # =============================
+    # 5. EXECUTE QUERY
+    # =============================
+    query = {
+        "size": 200,
+        "track_total_hits": True,
+        "query": final_query,
+        "sort": [
+            {"@timestamp": {"order": "desc"}}
+        ]
+    }
 
-    # res = es.search(index=index_pattern, body=query)
-    # hits = res.get("hits", {}).get("hits", [])
-    modules = ["suricata", "sophos", "panw"]
-    per_module_limit = 100
-    all_hits = []
-    
-    msearch_body = []
-    for mod in modules:
-        mod_query = copy.deepcopy(final_query)
-        
-        # Override filter module
-        if "filter" in mod_query["bool"]:
-            mod_query["bool"]["filter"] = [
-                f for f in mod_query["bool"]["filter"] 
-                if not (isinstance(f, dict) and "terms" in f and "event.module" in f["terms"])
-            ]
-            mod_query["bool"]["filter"].append({"term": {"event.module": mod}})
-        
-        # Header msearch (index mana yang dituju)
-        msearch_body.append({"index": index_pattern})
-        # Body msearch
-        msearch_body.append({
-            "size": per_module_limit,
-            "query": mod_query,
-            "sort": [{"@timestamp": {"order": "desc"}}],
-            "timeout": "30s" # Beri limit tiap sub-query agar tidak gantung
-        })
+    res = es.search(index=index_pattern, body=query)
+    hits = res.get("hits", {}).get("hits", [])
 
-    try:
-        # Eksekusi semua query sekaligus secara paralel
-        responses = es.msearch(body=msearch_body)
-        for res in responses.get("responses", []):
-            if "hits" in res:
-                all_hits.extend(res["hits"].get("hits", []))
-            else:
-                # Log jika salah satu module error (misal timeout) tanpa mematikan module lain
-                print(f"DEBUG: One module failed: {res.get('error', 'Unknown error')}")
-                
-    except Exception as e:
-        print(f"Msearch Global Error: {e}")
-
-    # Sortir hasil gabungan
-    all_hits.sort(key=lambda x: x["_source"].get("@timestamp", ""), reverse=True)
-    hits = all_hits
-    
-    # 7. Universal Mapper (Sama persis seperti codingan Anda)
+    # =============================
+    # 6. MAPPING RESULT
+    # =============================
     results = []
+
     for h in hits:
         src = h["_source"]
 
-        # --- LOGIKA PARSING KHUSUS SOPHOS (Parsing message string) ---
-        message_raw = src.get("message", "")
-        parsed_msg = {}
-
-        # Ambil data event/dataset untuk pengecekan dan pembersihan
-        event_info = src.get("event", {})
-        raw_dataset = event_info.get("dataset", "")
-        raw_module = event_info.get("module")
-    
-    # Jika ini adalah log Sophos dan field message berupa string
-        if src.get("event", {}).get("dataset") == "sophos.xg" and isinstance(message_raw, str):
-        # Regex ini mencari pola key="value" atau key=value
-            pattern = r'(\w+)=["\']?([^"\'\s]+)["\']?'
-            matches = re.findall(pattern, message_raw)
-            parsed_msg = {k: v for k, v in matches}
-
-        # --- PEMBERSIHAN EVENT TYPE (sophos.xg -> sophos) ---
-        # Jika module ada, pakai module. Jika tidak, ambil dataset lalu split di titik pertama
-        event_type = raw_module or (raw_dataset.split('.')[0] if raw_dataset else "unknown")
-
-        severity = (src.get("event", {}).get("severity_label") or 
-                    src.get("log", {}).get("level") or 
-                    src.get("log", {}).get("syslog", {}).get("severity", {}).get("name") or
-                    parsed_msg.get("severity")) # Ambil dari parsing jika ES kosong
-
-        mitre_raw = src.get("rule", {}).get("metadata", {}).get("mitre_tactic_name", [])
-        if not mitre_raw: mitre_raw = src.get("mitre", {}).get("stages", [])
-
-        mitre_value = None
-        if mitre_raw:
-            raw_mitre = mitre_raw[0].strip()
-            if raw_mitre.startswith(("Initial", "Reconnaissance")): mitre_value = "Initial Attempts"
-            elif raw_mitre.startswith(("Execution", "Persistence", "Privilege", "Escalation")): mitre_value = "Persistent Foothold"
-            elif raw_mitre.startswith(("Defense", "Credential", "Discovery", "Command")): mitre_value = "Exploration"
-            elif raw_mitre.startswith("Lateral"): mitre_value = "Propagation"
-            elif raw_mitre.startswith("U"): mitre_value = "Unmapped"
-            elif raw_mitre.startswith(("Collection", "Exfiltration", "Impact")): mitre_value = "Exfiltration"
-            else: mitre_value = mitre_raw[0]
-
-        desc = (src.get("rule", {}).get("name") or 
-                src.get("sophos", {}).get("xg", {}).get("message") or 
-                src.get("panw", {}).get("panos", {}).get("threat", {}).get("name"))
-
         results.append({
-            "timestamp": parsed_msg.get("timestamp") or src.get("@timestamp"),
-            "event_type": src.get("event", {}).get("module") or event_type,
-            "source_ip": src.get("source", {}).get("ip") or parsed_msg.get("src_ip"),
-            "destination_ip": src.get("destination", {}).get("ip") or parsed_msg.get("dst_ip"),
-            "port": src.get("destination", {}).get("port") or src.get("dst_port") or src.get("dest_port") or parsed_msg.get("dst_port"),
-            "protocol": src.get("network", {}).get("transport") or parsed_msg.get("protocol"),
-            "country": src.get("source", {}).get("geo", {}).get("country_name") or parsed_msg.get("src_country"),
-            "destination_country": src.get("destination", {}).get("geo", {}).get("country_name") or parsed_msg.get("dst_country"),
-            "severity": severity,
-            "mitre_stages": mitre_value,
-            "description": desc,
-            "sub_type": src.get("rule", {}).get("category") or src.get("log_type") or src.get("sub_type") or parsed_msg.get("log_subtype"),
-            "event_id": src.get("log", {}).get("id", {}).get("uid") or src.get("seqno") or parsed_msg.get("log_id"),
-            "source_longitude": src.get("source", {}).get("geo", {}).get("location", {}).get("lon"),
-            "source_latitude": src.get("source", {}).get("geo", {}).get("location", {}).get("lat"),
-            "destination_longitude": src.get("destination", {}).get("geo", {}).get("location", {}).get("lon"),
-            "destination_latitude": src.get("destination", {}).get("geo", {}).get("location", {}).get("lat"),
+            "timestamp": src.get("@timestamp"),
+            "event_type": src.get("event", {}).get("module"),
+            "source_ip": src.get("source", {}).get("ip"),
+            "destination_ip": src.get("destination", {}).get("ip"),
+            "port": src.get("destination", {}).get("port"),
+            "protocol": src.get("network", {}).get("transport"),
+            "country": None,
+            "destination_country": None,
+            "severity": src.get("event", {}).get("severity_label"),
+            "mitre_stages": None,
+            "description": src.get("rule", {}).get("name"),
+            "sub_type": None,
+            "category": src.get("rule", {}).get("category"),
+            "event_id": src.get("log", {}).get("id", {}).get("uid"),
+            "source_longitude": None,
+            "source_latitude": None,
+            "destination_longitude": None,
+            "destination_latitude": None,
             "application": "application",
-            "rule_reference": src.get("rule", {}).get("reference") or None,
-            "ruleset": src.get("rule", {}).get("ruleset") or None,
-            "rule_action": src.get("rule", {}).get("action") or None,
-            "rule_uuid": src.get("rule", {}).get("uuid") or None,
-            "metadata_update_at": src.get("rule", {}).get("metadata", {}).get("updated_at", []) or None,
-            "metadata_created_at": src.get("rule", {}).get("metadata", {}).get("created_at", []) or None,
-            "metadata_confidence": src.get("rule", {}).get("metadata", {}).get("confidence", []) or None,
-            "metadata_tag": src.get("rule", {}).get("metadata", {}).get("tag", []) or None,
-            "metadata_severity": src.get("rule", {}).get("metadata", {}).get("signature_severity", []) or None,
-            "network_packet_source": src.get("network", {}).get("packet_source") or None,
-            "category": src.get("event", {}).get("category") or None,
-            "device_name": parsed_msg.get("device_name") or None,
-            "device_model": parsed_msg.get("device_model") or None,
-            "device_serial_id": parsed_msg.get("device_serial_id") or None,
-            "log_component": parsed_msg.get("log_component") or None,
-            "log_subtype": parsed_msg.get("log_subtype") or None,
-            "fw_rule_type": parsed_msg.get("fw_rule_type") or None,
-            "ether_type": parsed_msg.get("ether_type") or None,
-            "in_interface": parsed_msg.get("in_interface") or None,
-            "src_mac": parsed_msg.get("src_mac") or None,
-            "in_display_interface": parsed_msg.get("in_display_interface") or None
+            "rule_reference": src.get("rule", {}).get("reference"),
+            "ruleset": src.get("rule", {}).get("ruleset"),
+            "rule_action": src.get("rule", {}).get("action"),
+            "rule_uuid": src.get("rule", {}).get("uuid"),
+            "metadata_updated_at": src.get("rule", {}).get("metadata", {}).get("updated_at"),
+            "metadata_created_at": src.get("rule", {}).get("metadata", {}).get("created_at"),
+            "metadata_confidence": src.get("rule", {}).get("metadata", {}).get("confidence"),
+            "metadata_severity": src.get("rule", {}).get("metadata", {}).get("signature_severity"),
+            "packet_source": src.get("network", {}).get("packet_source")
         })
-        
+
     return results
 
 def get_suricata_events(es, INDEX, timeframe):

@@ -61,13 +61,15 @@ try:
     # 🔍 Ping ringan (lebih aman dari authenticate)
     if es.ping():
         elastic_connected = True
+        print(f"[ELASTIC] ✅ Connected to {ELASTIC_HOST}")
     else:
         elastic_error = "Ping failed"
+        print(f"[ELASTIC] ❌ Ping failed to {ELASTIC_HOST}")
 
 except Exception as e:
     elastic_error = str(e)
     es = None
-
+    print(f"[ELASTIC] ❌ Connection error: {elastic_error}")
 
 def get_elastic_status():
     """

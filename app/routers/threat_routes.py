@@ -88,8 +88,8 @@ def verify_internal_access(x_internal_service_key: str = Header(None, alias="X-I
 #     return False   
 
 
-@router.post("/events/filter", dependencies=[Depends(verify_internal_access)])
-#@router.post("/events/filter")
+#@router.post("/events/filter", dependencies=[Depends(verify_internal_access)])
+@router.post("/events/filter")
 def get_filtered_events(body: EventRequest):
     # Langsung panggil fungsi gabungan
     # Elasticsearch melakukan semua filter & search di sisi server
